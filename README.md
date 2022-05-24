@@ -6,6 +6,10 @@ Using machine learning algorithms to test the viability of health outcome predic
   least square regression techiniques.  In this project, I wanted to test this outcome with a variety of machine learning techniques to see what factors (if any) 
   were significant.</p>
   
+<h4 align="left">Languages:</h4>
+<p align="left">
+  <a href="https://www.r-project.org/" target="_blank" rel="noreferrer"> <img src="https://www.r-project.org/logo/Rlogo.svg" alt="R" width="40" height="40"/> </a>
+  
 <h3>Naviation of Files</h3>
 <p>There are quite a few files.  To view the final product: download the final_project.zip where you can view the paper and knitted(to pdf) RMD files.  
   When selecting the zip folder on the main repository page, you most then select "view raw" to download the zipped file.</p>
