@@ -1,0 +1,171 @@
+---
+title: "573 Research Project"
+author: "Troy Hall"
+date: "4/6/2022"
+output: html_document
+---
+### USER NOTE ###
+Be sure to set all appropriate filepaths in the chunk below BEFORE running this code. 
+Save all dependencies including the 2019 AESC CPS .dat file and .xml file, county data files, "IPUMS health var table" and "1990 Census to NAICS" to working directory BEFORE running this code.
+
+If you focus on the classification problem, please report results for the following meth-
+ods: logistic regression, LDA/QDA, classification trees and random forests, boosting, SVM,
+and kNN.
+```{r}
+workingd = c("C:/Users/troyhall/Documents/Classes/Spring '22/ECON 573/Final Project/")
+setwd(workingd)
+library(dplyr)
+library(tidyverse)
+library(ipumsr)
+library(readxl)
+```
+
+
+# Data import
+```{r}
+if (!require("ipumsr")) stop("Reading IPUMS data into R requires the ipumsr package. It can be installed using the following command: install.packages('ipumsr')")
+
+ddi <- read_ipums_ddi("cps_00008.xml")
+cpsdata <- read_ipums_micro(ddi)
+```
+
+# Data Cleaning
+```{r}
+# Adults
+cpsdata = subset(cpsdata, AGE >= 18)
+
+# Industry movement variable
+cpsdata$indmove = ifelse(cpsdata$IND1990==cpsdata$IND90LY, 1, 0)
+
+# Live in a rural county (less than 100k people total)
+cpsdata$rural = ifelse(cpsdata$COUNTY==0, 1, 0)
+
+# Manufacturing workers
+censustonaics = read_xlsx("1990censustoNAICS.xlsx")
+censustonaics$`1990 Census` = as.numeric(censustonaics$`1990 Census`)
+cpsdata = cpsdata %>%
+  rename("1990 Census" = "IND1990")
+cpsdata = cpsdata %>% 
+  left_join(censustonaics, by = "1990 Census")
+manfacNAICS = c(11,21,31,32,33)
+cpsdata$manufacturing = ifelse(cpsdata$`1997 NAICS` %in% manfacNAICS, 1, 0)
+
+# Health variable from 1 to 5 to continuous measure between 0 and 1
+cpsdata$HEALTH = ifelse(cpsdata$HEALTH == 1, 1,
+       ifelse(cpsdata$HEALTH == 2, 0.75,
+              ifelse(cpsdata$HEALTH == 3, 0.5,
+                     ifelse(cpsdata$HEALTH == 4, 0.25,
+                            ifelse(cpsdata$HEALTH == 5, 0, NA)))))
+
+# Reconciling SCHLCOLL var to a single category of not-in-school
+cpsdata$SCHLCOLL = ifelse(cpsdata$SCHLCOLL==5, 0, cpsdata$SCHLCOLL)
+
+# Categorizing EDUC into Below HS, HS, Some college, Associates, Bachelors, Graduate training
+cpsdata$EDUC = ifelse(cpsdata$EDUC == 91, 92, cpsdata$EDUC)
+cpsdata$Education = ifelse(cpsdata$EDUC < 73, 1, 
+                               ifelse(cpsdata$EDUC == 73, 2, 
+                                      ifelse(cpsdata$EDUC == 81, 3, 
+                                             ifelse(cpsdata$EDUC == 92, 4,
+                                                    ifelse(cpsdata$EDUC == 111, 5,
+                                                           ifelse(cpsdata$EDUC > 111, 6, cpsdata$EDUC))))))
+
+# Adding GDP per capita by state (Probably shouldn't use this variable. Population/GDP numbers are by state due to unavailable counties)
+countypopdata = read_excel(path = "County data 2001-19 (Autosaved).xlsx", sheet = 1)
+countyGDPdata = read_csv("County GDP data 2001-19.csv")
+countypopdata = countypopdata[c("GeoFIPS","GeoName","LineCode","2019")]
+countypopdata = countypopdata %>%
+  rename("Population2019" = "2019")
+countypopdata$GeoFIPS = str_sub(countypopdata$GeoFIPS,2,−2)
+countyGDPdata = countyGDPdata[c("GeoFIPS","GeoName","LineCode","2019")]
+countyGDPdata = countyGDPdata %>%
+  rename("GDP2019" = "2019")
+
+countypopdata = subset(countypopdata, countypopdata$LineCode %in% 10)
+countyGDPdata = subset(countyGDPdata, countyGDPdata$LineCode %in% 10)
+
+countydata = merge(countypopdata, countyGDPdata, by.x = "GeoFIPS", by.y = "GeoFIPS")
+countydata = countydata[c("GeoFIPS","GeoName.x","LineCode.x","Population2019", "GDP2019")]
+
+cpsdata$COUNTY = ifelse(cpsdata$COUNTY == 00000, cpsdata$STATEFIP, cpsdata$COUNTY)
+cpsdata$COUNTY = str_pad(cpsdata$COUNTY, width=5, side="right", pad="0")
+cpsdata$STATEFIP = str_pad(cpsdata$STATEFIP, width=5, side="right", pad="0")
+
+countydata$Population2019 = as.numeric(countydata$Population2019)
+countydata$GDP2019 = as.numeric(countydata$GDP2019)
+countydata = transform(countydata, GDPpercap = GDP2019*1000 / Population2019)
+
+cpsdata1 = merge(cpsdata, countydata, by.x = "STATEFIP", by.y = "GeoFIPS")
+
+
+# Adding job status vars
+cpsdata1$changedjob = ifelse(cpsdata1$OCC1990 == cpsdata1$OCC90LY, 1,
+                             ifelse(cpsdata1$OCC1990 != cpsdata1$OCC90LY, 2, 0))
+
+cpsdata1$lostjob1 = ifelse(cpsdata1$OCC1990 == 999, 2, 0)
+cpsdata1$lostjob2 = ifelse(cpsdata1$OCC90LY == 999, 1, 0)
+
+cpsdata1$unempoversamp = ifelse(cpsdata1$OCC1990 + cpsdata1$OCC90LY == 3, 1, 0)
+cpsdata1$lostjob = ifelse(cpsdata1$OCC90LY - cpsdata1$OCC1990 == -2, 1, 0)
+
+# Race recode
+cpsdata1$RACE = ifelse(cpsdata1$RACE == 999, 0, cpsdata1$RACE)
+cpsdata1$RACE = ifelse(cpsdata1$RACE == 100, "White", 
+                               ifelse(cpsdata1$RACE == 200, "Black", 
+                                      ifelse(cpsdata1$RACE == 300, "Native", 
+                                             ifelse(cpsdata1$RACE == 651, "Asian",
+                                                    ifelse(cpsdata1$RACE == 652, "Pacific Islander",
+                                                           ifelse(cpsdata1$RACE > 653, "Multiracial", ifelse(cpsdata1$HISPAN != 0, "Hispanic", "Other")))))))
+
+# Married or not
+cpsdata1$MARST = ifelse(cpsdata1$MARST > 2, 1, 0)
+
+# Population status
+cpsdata1$POPSTAT = ifelse(cpsdata1$POPSTAT == 1, "Civilian",
+                         ifelse(cpsdata1$POPSTAT == 2, "Military",
+                                ifelse(cpsdata1$POPSTAT == 3, "Child")))
+
+# Citizen
+cpsdata1$CITIZEN = ifelse(cpsdata1$CITIZEN == 5, 0, 1)
+
+# Nativity
+cpsdata1$NATIVITY = ifelse(cpsdata1$NATIVITY == 0, "Unknown",
+                          ifelse(cpsdata1$NATIVITY == 5, "Foreign-born", "Native"))
+
+# Empstat
+cpsdata1$EMPSTAT = ifelse(cpsdata1$EMPSTAT == 1, "Military",
+                         ifelse(cpsdata1$EMPSTAT == 10, "Employed",
+                                ifelse(cpsdata1$EMPSTAT == 12, "Employed",
+                                       ifelse(cpsdata1$EMPSTAT == 21, "Unemployed",
+                                              ifelse(cpsdata1$EMPSTAT == 22, "Unemployed",
+                                                     ifelse(cpsdata1$EMPSTAT > 29, "NILF", NA))))))
+
+# Labor force or NILF
+cpsdata1$LABFORCE = ifelse(cpsdata1$LABFORCE = 2, 1, 0)
+
+# Migration recode
+cpsdata1$MIGRATE1 = ifelse(cpsdata1$MIGRATE1 == 1, "Same residence",
+       ifelse(cpsdata1$MIGRATE1 == 3, "Moved, same county",
+              ifelse(cpsdata1$MIGRATE1 = 4, "Moved, diff county",
+                     ifelse(cpsdata1$MIGRATE1 = 5, "Moved, new state",
+                            ifelse(cpsdata1$MIGRATE1 == 6, "Moved, abroad", 0)))))
+
+# Disability recode
+cpsdata1$DISABWRK = ifelse(cpsdata1$DISABWRK == 2, 1, 0)
+
+# Keeping useful vars/cleanup
+cpsdata1 = cpsdata1[c("STATEFIP","REGION","HHINCOME","NFAMS", "PERNUM", "RELATE", "AGE", "SEX", "RACE", "MARST", "POPSTAT", "VETSTAT", "FAMSIZE", "NCHILD", "NCHLT5", "YRIMMIG", "NATIVITY", "LABFORCE", "UHRSWORKT", "SCHLCOLL", "DIFFANY", "FTOTVAL", "INCTOT", "MIGRATE1", "DISABWRK", "HEALTH", "GOTWIC", "indmove", "rural", "manufacturing", "Education", "Population2019", "GDP2019", "changedjob", "unempoversamp", "lostjob")]
+cpsdataoriginaldataset = cpsdata
+cpsdata = cpsdata1
+
+```
+
+
+# Logistic Regression
+```{r}
+
+```
+
+#
+
+
+

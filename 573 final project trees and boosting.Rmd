@@ -1,0 +1,119 @@
+---
+title: "trees and boost"
+author: "Ryan Brunner"
+date: "4/18/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+summary(cars)
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+cpsdatatrees = cpsdata1[c("HEALTH", "RACE", "HISPAN", "FEMALE", "MARST", "METRO", "Education", "STATEFIP", "HHINCOME", "AGE", "VETSTAT", "FAMSIZE", "LABFORCE", "bornabroad", "UHRSWORKT", "indmove", "lostjob", "ANYCOVNW")]
+cpsdatatrees$HEALTH <- as.numeric(cpsdatatrees$HEALTH)
+
+#create a training set for the trees
+traintrees <- sample (1: nrow (cpsdatatrees), nrow (cpsdatatrees) / 4)
+#create a decision tree no subset selection
+fulldatasettree <- tree(HEALTH~., cpsdatatrees, subset=traintrees)
+#summary and plot the decision tree
+summary(fulldatasettree)
+plot(fulldatasettree)
+text(fulldatasettree, pretty=0)
+
+
+#predicted vlaues for the test data using full tree
+y.pred <- predict (fulldatasettree , newdata = cpsdatatrees[-traintrees ,])
+
+
+#plot actual vs predicted and find MSE
+testtreepred <- cpsdatatrees[-traintrees, "HEALTH"]
+plot (y.pred , testtreepred)
+abline (0, 1)
+mean ((y.pred - testtreepred)^2)
+sqrt(mean ((y.pred - testtreepred)^2))
+#create another decision tree by using cross validation
+cv.tree <- cv.tree(fulldatasettree)
+plot (cv.tree$size, cv.tree$dev, type = "b")
+#same as full model
+
+#prune the tree using the cross validtion
+prunedtree <- prune.tree (fulldatasettree , best = 5)
+plot (prunedtree)
+text (prunedtree , pretty = 0)
+
+#predicted vlaues for the test data using prunded tree
+ypred2 <- predict (prunedtree , newdata = cpsdatatrees[-traintrees ,],)
+plot (ypred2 , testtreepred)
+abline (0, 1)
+mean ((ypred2 - testtreepred)^2)
+
+#MSE predicting everyones health to be the same 
+mean((mean(cpsdatatrees$HEALTH)-testtreepred)^2)
+sqrt(mean((mean(cpsdatatrees$HEALTH)-testtreepred)^2))
+```
+
+
+
+
+
+
+
+#Forest
+```{r}
+
+library(randomForest)
+
+#Create Random Forest
+forest.cps <- randomForest(HEALTH ~., data=cpsdatatrees, subset = traintrees, mtry=6, importance = TRUE)
+
+yhatforest <- predict (forest.cps, newdata = cpsdatatrees[-traintrees ,])
+
+testforest <- cpsdatatrees[-traintrees, "HEALTH"]
+plot(yhatforest , testforest)
+abline (0, 1)
+mean((yhatforest - testforest)^2)
+sqrt(mean((yhatforest - testforest)^2))
+importance(forest.cps)
+varImpPlot(forest.cps)
+```
+
+
+# Boosting
+```{r}
+
+library(gbm)
+cpsdatatrees$RACE = factor(cpsdatatrees$RACE)
+cpsdatatrees$STATEFIP = factor(cpsdatatrees$STATEFIP)
+
+cpsboost <- gbm(HEALTH~., data= cpsdatatrees[traintrees,], distribution = "gaussian", n.trees = 5000)
+summary(cpsboost)
+
+yhat.boost <- predict (cpsboost ,
+data = cpsdatatrees[-traintrees,], n.trees = 5000)
+testboost <- cpsdatatrees[-traintrees, "HEALTH"]
+mean ((yhat.boost - testboost)^2)
+sqrt(mean ((yhat.boost - testboost)^2))
+
+
+

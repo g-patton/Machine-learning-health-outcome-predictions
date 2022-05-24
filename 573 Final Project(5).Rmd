@@ -1,0 +1,607 @@
+---
+title: "573 Research Project"
+author: "Troy Hall"
+date: "4/6/2022"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+### USER NOTE ###
+Be sure to set all appropriate filepaths in the chunk below BEFORE running this code. 
+Save all dependencies including the 2019 AESC CPS .dat file and .xml file, county data files, "IPUMS health var table" and "1990 Census to NAICS" to working directory BEFORE running this code.
+
+If you focus on the regression prediction problem, please report results for the following
+methods: linear regression, LASSO/ridge/elastic net, regression trees and random forests,
+boosting, SVM, kNN.
+
+If you focus on the classification problem, please report results for the following meth-
+ods: logistic regression, LDA/QDA, classification trees and random forests, boosting, SVM,
+and kNN.
+```{r}
+setwd("C:/Users/graha/Dropbox/PC/Desktop/econ 573/final project")
+
+library(dplyr)
+library(tidyverse)
+library(ipumsr)
+library(readxl)
+library(glmnet)
+library(ggplot2)
+library(pls)
+library(class)
+library(corrplot)
+library(e1071)
+library(leaps)
+library(tree)
+library(caret)
+library(textir)
+library(GGally)
+library(gamlr)
+library(ggfortify)
+```
+
+
+# Data import
+```{r}
+if (!require("ipumsr")) stop("Reading IPUMS data into R requires the ipumsr package. It can be installed using the following command: install.packages('ipumsr')")
+
+ddi <- read_ipums_ddi("cps_00009.xml")
+cpsdata <- read_ipums_micro(ddi)
+```
+
+# Data Cleaning
+```{r}
+# Adults
+cpsdata = subset(cpsdata, AGE >= 18)
+
+# Industry movement variable
+cpsdata$indmove = ifelse(cpsdata$IND1990==cpsdata$IND90LY, 1, 0)
+
+# Live in a rural county (less than 100k people total)
+cpsdata$rural = ifelse(cpsdata$COUNTY==0, 1, 0)
+
+# Manufacturing workers
+censustonaics = read_xlsx("1990censustoNAICS.xlsx")
+censustonaics$`1990 Census` = as.numeric(censustonaics$`1990 Census`)
+cpsdata = cpsdata %>%
+  rename("1990 Census" = "IND1990")
+cpsdata = cpsdata %>% 
+  left_join(censustonaics, by = "1990 Census")
+manfacNAICS = c(11,21,31,32,33)
+cpsdata$manufacturing = ifelse(cpsdata$`1997 NAICS` %in% manfacNAICS, 1, 0)
+
+# Health variable from 1 to 5 to continuous measure between 0 and 1
+cpsdata$HEALTH = ifelse(cpsdata$HEALTH == 1, 1,
+       ifelse(cpsdata$HEALTH == 2, 0.75,
+              ifelse(cpsdata$HEALTH == 3, 0.5,
+                     ifelse(cpsdata$HEALTH == 4, 0.25,
+                            ifelse(cpsdata$HEALTH == 5, 0, NA)))))
+
+# Reconciling SCHLCOLL var to a single category of not-in-school
+cpsdata$SCHLCOLL = ifelse(cpsdata$SCHLCOLL==5, 0, cpsdata$SCHLCOLL)
+
+# Categorizing EDUC into Below HS, HS, Some college, Associates, Bachelors, Graduate training
+cpsdata$EDUC = ifelse(cpsdata$EDUC == 91, 92, cpsdata$EDUC)
+cpsdata$Education = ifelse(cpsdata$EDUC < 73, 1, 
+                               ifelse(cpsdata$EDUC == 73, 2, 
+                                      ifelse(cpsdata$EDUC == 81, 3, 
+                                             ifelse(cpsdata$EDUC == 92, 4,
+                                                    ifelse(cpsdata$EDUC == 111, 5,
+                                                           ifelse(cpsdata$EDUC > 111, 6, cpsdata$EDUC))))))
+
+# Adding GDP per capita by state (Probably shouldn't use this variable. Population/GDP numbers are by state due to unavailable counties)
+countypopdata = read_excel(path = "County data 2001-19 (Autosaved).xlsx", sheet = 1)
+countyGDPdata = read_csv("County GDP data 2001-19.csv")
+countypopdata = countypopdata[c("GeoFIPS","GeoName","LineCode","2019")]
+countypopdata = countypopdata %>%
+  rename("Population2019" = "2019")
+countypopdata$GeoFIPS = str_sub(countypopdata$GeoFIPS,2,-
+                                  2)
+countyGDPdata = countyGDPdata[c("GeoFIPS","GeoName","LineCode","2019")]
+countyGDPdata = countyGDPdata %>%
+  rename("GDP2019" = "2019")
+
+countypopdata = subset(countypopdata, countypopdata$LineCode %in% 10)
+countyGDPdata = subset(countyGDPdata, countyGDPdata$LineCode %in% 10)
+
+countydata = merge(countypopdata, countyGDPdata, by.x = "GeoFIPS", by.y = "GeoFIPS")
+countydata = countydata[c("GeoFIPS","GeoName.x","LineCode.x","Population2019", "GDP2019")]
+
+cpsdata$COUNTY = ifelse(cpsdata$COUNTY == 00000, cpsdata$STATEFIP, cpsdata$COUNTY)
+cpsdata$COUNTY = str_pad(cpsdata$COUNTY, width=5, side="right", pad="0")
+cpsdata$STATEFIP = str_pad(cpsdata$STATEFIP, width=5, side="right", pad="0")
+
+countydata$Population2019 = as.numeric(countydata$Population2019)
+countydata$GDP2019 = as.numeric(countydata$GDP2019)
+countydata = transform(countydata, GDPpercap = GDP2019*1000 / Population2019)
+
+cpsdata1 = merge(cpsdata, countydata, by.x = "STATEFIP", by.y = "GeoFIPS")
+
+
+# Adding job status vars
+cpsdata1$changedjob = ifelse(cpsdata1$OCC1990 == cpsdata1$OCC90LY, 1,
+                             ifelse(cpsdata1$OCC1990 != cpsdata1$OCC90LY, 2, 0))
+
+cpsdata1$lostjob1 = ifelse(cpsdata1$OCC1990 == 999, 2, 0)
+cpsdata1$lostjob2 = ifelse(cpsdata1$OCC90LY == 999, 1, 0)
+
+cpsdata1$unempoversamp = ifelse(cpsdata1$OCC1990 + cpsdata1$OCC90LY == 3, 1, 0)
+cpsdata1$lostjob = ifelse(cpsdata1$OCC90LY - cpsdata1$OCC1990 == -2, 1, 0)
+
+# Race recode
+cpsdata1$RACE = ifelse(cpsdata1$RACE == 999, 0, cpsdata1$RACE)
+cpsdata1$RACE = ifelse(cpsdata1$RACE == 100, "White", 
+                    ifelse(cpsdata1$RACE == 200, "Black",
+                        ifelse(cpsdata1$RACE == 651, "Asian",
+                            ifelse(cpsdata1$RACE == 652, "Asian", "Other"))))
+
+# Hispanic
+cpsdata1$HISPAN = ifelse(cpsdata1$HISPAN > 0, 1, 0)
+
+# Married or not
+cpsdata1$MARST = ifelse(cpsdata1$MARST > 2, 1, 0)
+
+# Population status
+cpsdata1$POPSTAT = ifelse(cpsdata1$POPSTAT == 1, "Civilian",
+                         ifelse(cpsdata1$POPSTAT == 2, "Military",
+                                ifelse(cpsdata1$POPSTAT == 3, "Child", 0)))
+
+# Citizen
+cpsdata1$CITIZEN = ifelse(cpsdata1$CITIZEN == 5, 0, 1)
+
+# Nativity
+cpsdata1$NATIVITY = ifelse(cpsdata1$NATIVITY == 0, 1,
+                          ifelse(cpsdata1$NATIVITY == 5, 1, 0))
+cpsdata1 = cpsdata1 %>%
+  rename("bornabroad" = "NATIVITY")
+
+# Empstat
+cpsdata1$EMPSTAT = ifelse(cpsdata1$EMPSTAT == 1, "Military",
+                         ifelse(cpsdata1$EMPSTAT == 10, "Employed",
+                                ifelse(cpsdata1$EMPSTAT == 12, "Employed",
+                                       ifelse(cpsdata1$EMPSTAT == 21, "Unemployed",
+                                              ifelse(cpsdata1$EMPSTAT == 22, "Unemployed",
+                                                     ifelse(cpsdata1$EMPSTAT > 29, "NILF", NA))))))
+
+# Labor force or NILF
+cpsdata1$LABFORCE = ifelse(cpsdata1$LABFORCE == 2, 1, 0)
+
+# Migration recode
+cpsdata1$MIGRATE1 = ifelse(cpsdata1$MIGRATE1 == 1, "Same residence",
+       ifelse(cpsdata1$MIGRATE1 == 3, "Moved, same county",
+              ifelse(cpsdata1$MIGRATE1 == 4, "Moved, diff county",
+                     ifelse(cpsdata1$MIGRATE1 == 5, "Moved, new state",
+                            ifelse(cpsdata1$MIGRATE1 == 6, "Moved, abroad", 0)))))
+
+# Disability recode
+cpsdata1$DISABWRK = ifelse(cpsdata1$DISABWRK == 2, 1, 0)
+
+# Adjusting income vars to non-negative and logging
+cpsdata1$HHINCOME = log(cpsdata1$HHINCOME + abs(min(cpsdata1$HHINCOME)) + 1)
+cpsdata1$FTOTVAL = log(cpsdata1$FTOTVAL + abs(min(cpsdata1$FTOTVAL)) + 1)
+cpsdata1$INCTOT = log(cpsdata1$INCTOT + abs(min(cpsdata1$INCTOT)) + 1)
+
+
+
+# Keeping useful vars/cleanup
+cpsdata1 = cpsdata1[c("HEALTH", "RACE", "HISPAN", "SEX", "MARST", "METRO", "Education", "STATEFIP", "HHINCOME", "AGE", "PERNUM", "VETSTAT", "FAMSIZE", "LABFORCE", "bornabroad", "UHRSWORKT", "indmove", "lostjob", "ANYCOVNW")]
+
+# Cleaning up hours worked
+cpsdata1$UHRSWORKT = ifelse(cpsdata1$UHRSWORKT > 169, 0, cpsdata$UHRSWORKT)
+
+# Metropolitan area (1 for metro area, 0 for not)
+cpsdata1$METRO = ifelse(cpsdata1$METRO == 0, 0, 
+                        ifelse(cpsdata1$METRO == 1, 0, 
+                               ifelse(cpsdata1$METRO > 1.5, 1, 0)))
+
+# Binary sex
+cpsdata1$SEX = ifelse(cpsdata1$SEX == 1, 0,
+                      ifelse(cpsdata1$SEX == 2, 1, 0))
+cpsdata1 = cpsdata1 %>%
+  rename("FEMALE" = "SEX")
+
+# Binary health var
+cpsdata1$goodhealth = ifelse(cpsdata1$HEALTH > 0.26, 1, 0)
+
+cpsdataoriginaldataset = cpsdata
+cpsdata = cpsdata1
+cpsdata1
+```
+
+# Setting X vars and Y of health
+```{r}
+set.seed(123)
+cpshealth = cpsdata1[cpsdata1$HEALTH>0, ]
+cpshealth = cpsdata1[cpsdata1$AGE>0, ]
+cpshealth = cpsdata1[cpsdata1$FAMSIZE>0, ]
+cpshealth = cpsdata1[cpsdata1$Education>1, ]
+cpshealth = cpsdata1[cpsdata1$HHINCOME>=0, ]
+
+cpsmetro = cpshealth[cpsdata1$METRO ==1, ]
+
+metroasian = cpsmetro[cpsmetro$RACE =="Other", ]
+
+x = data.matrix(cpshealth[ c("RACE", "HISPAN", "FEMALE", "MARST", "METRO", "Education", "STATEFIP", "HHINCOME", "AGE", "VETSTAT", "FAMSIZE", "LABFORCE", "bornabroad", "UHRSWORKT", "indmove", "lostjob", "ANYCOVNW")])
+y = cpshealth$HEALTH
+
+dfhealth = cpshealth %>%
+  select(RACE, HISPAN, FEMALE, MARST, METRO, Education, STATEFIP, HHINCOME, AGE, VETSTAT, FAMSIZE, LABFORCE, bornabroad, UHRSWORKT, indmove, lostjob, ANYCOVNW, HEALTH )
+
+dfmetro = cpsmetro %>%
+  select(RACE, HISPAN, FEMALE, MARST, METRO, Education, STATEFIP, HHINCOME, AGE, VETSTAT, FAMSIZE, LABFORCE, bornabroad, UHRSWORKT, indmove, lostjob, ANYCOVNW, HEALTH )
+
+dfhealth_numeric = cpshealth %>%
+  select(HISPAN, FEMALE, MARST, METRO, Education, HHINCOME, AGE, VETSTAT, FAMSI
+         ZE, LABFORCE, bornabroad, UHRSWORKT, indmove, lostjob, ANYCOVNW, HEALTH )
+
+dfmetro = cpsmetro %>%
+  select(RACE, HISPAN, FEMALE, MARST, METRO, Education, STATEFIP, HHINCOME, AGE, VETSTAT, FAMSIZE, LABFORCE, bornabroad, UHRSWORKT, indmove, lostjob, ANYCOVNW, HEALTH )
+```
+
+
+##############################################################################
+
+End cleaning, begin models
+
+##############################################################################
+
+
+
+#summary stats
+```{r}
+
+colMeans(dfhealth[sapply(dfhealth, is.numeric)])
+
+colMeans(dfmetro[sapply(dfmetro, is.numeric)]) 
+
+
+```
+
+
+# OLS
+```{r}
+
+OLS = lm(y ~ x, data = cpshealth)
+summary(OLS)
+
+ols_summ = summary(OLS) 
+mean(ols_summ$residuals^2)
+
+##prediction
+
+data_ols = data.frame(pred = predict(OLS), actual = cpshealth$HEALTH)
+
+head(data_ols)
+mean((data_ols$actual - data_ols$pred)^2)
+
+```
+
+# Ridge
+```{r}
+
+ridge_m = glmnet(x, y, alpha = 0)
+plot(ridge_m)
+
+
+
+ridge.model = cv.glmnet(x,y, type.measure='mse', alpha=0)
+ridge.model
+ridge.model$lambda.min
+#reports lowest at 0.0083   this is also MSE
+ridge.model$lambda.1se
+# 0.05393431
+
+#plot it
+plot(ridge.model)
+
+#selects 8 model but with log-L of -3.something
+coef(ridge.model)
+
+new_ridge = glmnet(x,y,alpha=0, lambda = ridge.model$lambda.min )
+new_ridge
+coef(new_ridge)
+
+y_predicted_ridge = predict(ridge_m, s= ridge.model$lambda.min
+, newx = x )
+
+SST_ridge = sum((y - mean(y))^2)
+SSE_ridge = sum((y_predicted_ridge - y)^2)
+rsq_ridge = 1- SSE_ridge/SST_ridge
+rsq_ridge
+# 0.1975982
+
+y_predicted_best.ridge = predict(new_ridge, s= ridge.model$lambda.min
+, newx = x )
+
+SST_ridge = sum((y - mean(y))^2)
+SSE_ridge2 = sum((y_predicted_best.ridge - y)^2)
+rsq_ridge2 = 1- SSE_ridge2/SST_ridge
+rsq_ridge2
+
+
+
+```
+# LASSO
+```{r}
+
+lasso.base = glmnet(x, y, alpha = 1)
+plot(lasso.base)
+
+
+lasso.model = cv.glmnet(x, y, type.measure = "mse", alpha=1)
+
+lasso.model
+
+coef(lasso.model)
+
+#plot it
+plot(lasso.model)
+
+#predicts lowest mse with 9 and 16 variable model
+
+
+lowest_lambda_lasso = lasso.model$lambda.min
+print(lowest_lambda_lasso)
+#0.0002177337
+
+best.lasso = glmnet(x,y, alpha=1, lambda = lowest_lambda_lasso)
+
+#checking coef's for lasso
+coef(best.lasso)
+
+
+y_predicted_lasso = predict(lasso.base, s= lasso.model$lambda.min
+, newx = x )
+
+SST_lasso = sum((y - mean(y))^2)
+SSE_lasso = sum((y_predicted_lasso - y)^2)
+rsq_lasso = 1- SSE_lasso/SST_lasso
+rsq_lasso
+#0.1976951
+
+y_predicted_best.lasso = predict(best.lasso, s= lasso.model$lambda.min
+, newx = x )
+
+SST_lasso = sum((y - mean(y))^2)
+SSE_lasso2 = sum((y_predicted_best.lasso - y)^2)
+rsq_lasso2 = 1- SSE_lasso2/SST_lasso
+rsq_lasso2
+
+
+```
+
+
+
+# PCR not needed but interesting
+```{r}
+pca.results <- prcomp(dfhealth_numeric, center = TRUE,scale. = TRUE)
+pca.results
+autoplot(pca.results, loadings = TRUE)
+
+pca.results$rotation = -1*pca.results$rotation
+
+
+pca.results$x = -1*pca.results$x
+head(pca.results$x)
+
+pca.results$sdev^2/ sum(pca.results$sdev^2)
+
+#this output by number is the percentage of variance explained by each principle component
+
+```
+
+
+# elastic net
+```{r}
+#create train and test data
+
+train_health <- createDataPartition(dfhealth$HEALTH, 
+                                         p = .8,
+                                  list = FALSE,
+                                  times = 1)
+vector_train_index =c(train_health)
+train_elastic <- dfhealth[ vector_train_index,]
+valid_elastic <- dfhealth[-vector_train_index,]
+
+#creating model
+control <- trainControl(method = "repeatedcv",
+                              number = 10,
+                              repeats = 5,
+                              search = "random",
+                              verboseIter = TRUE)
+
+elastic.model = train(
+  HEALTH~., 
+  data = train_elastic, 
+  method = "glmnet",
+  trControl = control,
+  tuneLength = 10
+  )
+
+
+elastic.model$bestTune
+plot(elastic.model, ylab = "RMSE")
+elastic.model
+
+mean(elastic.model$resample$RMSE)
+
+
+
+#reports an optimal alpha of 0.8 and lambda of 0.0004774163
+
+coef(elastic.model$finalModel, elastic.model$bestTune$lambda)
+
+
+predictions.train = predict(elastic.model, train_elastic)
+
+predict_test = predict(elastic.model, valid_elastic)
+
+mean(elastic.model$resample$Rsquared)
+
+
+elastic.mse = (mean(elastic.model$resample$Rsquared))^2
+
+elastic.mse
+
+
+```
+
+
+# KNN
+```{r}
+# Prepping the dataset (no factor vars)
+cpsKNNt = cpshealth[complete.cases(cpshealth), ]
+cpsKNN = cpshealth[c("RACE", "HISPAN", "FEMALE", "MARST", "METRO", "Education", "HHINCOME", "AGE", "VETSTAT", "FAMSIZE", "LABFORCE", "bornabroad", "UHRSWORKT", "indmove", "lostjob", "ANYCOVNW")]
+cpsKNN$RACE = as.factor(cpsKNN$RACE)
+cpsKNN$RACE = as.numeric(cpsKNN$RACE)
+cpsKNN$AGE = as.numeric(cpsKNN$AGE)
+
+# Prepping KNN
+samp = sample(1:nrow(cpsKNN), 0.5 * nrow(cpsKNN))
+knn.train = cpsKNN[samp,]
+knn.test = cpsKNN[-samp,]
+train.health = cpsKNNt$HEALTH[samp]
+test.health = cpsKNNt$HEALTH[-samp]
+
+# Running KNN and reporting results
+knn.results = data.frame(k = 1:10, testerror = NA)
+for(i in 1:10){
+knn.pred <- knn(knn.train, knn.test, train.health, k = i)
+knn.results$testerror[i] = mean(knn.pred == test.health)}
+
+knn.results
+```
+
+
+
+
+# SVM
+```{r}
+#copy for experimenting
+df_svm_full = dfhealth
+
+#svm takes far too long for a laptop to compute 120,000 observations so will try half of that number in a random sample
+#linear:12000
+#radial: 6000
+#poly: 1200-1300 is smallest where instances of all variables are exhibited. even reducing it this small would not allow the laptop to run it within 4-5 hours
+
+### ############################################################# copy from here to change sample size
+df_svm = sample_n(df_svm_full, 12000)
+
+#changing y to factor variable
+df_svm$HEALTH <- as.factor(df_svm$HEALTH)
+
+# ################### creating training data
+intrain <- createDataPartition(y= df_svm$HEALTH, p = .8,
+                                  list = FALSE,
+                                  times = 1)
+svm_train_index =c(intrain)
+svm_training <- df_svm[svm_train_index, ]
+svm_testing <- df_svm[-svm_train_index, ]
+
+#checking dimensions
+#dim(svm_training)
+#dim(svm_testing)
+
+#convert y into factor
+svm_training[["HEALTH"]] = factor(svm_training[["HEALTH"]])
+################################################################## to here to change sample size
+################################################################### and paste it above the model you want to use
+
+# ####### ############# ################################  LINEAR
+
+
+svm_linear = train(
+  HEALTH~., data = svm_training, method = "svmLinear", 
+  trControl = trainControl("cv", number = 10), 
+  tuneGrid = expand.grid(C = seq(0, 2, length = 20)), 
+  preProcess = c("center", "scale"), tuneLength = 10
+  )
+svm_linear
+plot(svm_linear)
+
+test_pred <- predict(svm_linear, newdata = svm_testing)
+test_pred
+
+
+confusionMatrix(table(test_pred, svm_testing$HEALTH))
+svm_linear$bestTune
+ 
+mean(test_pred == svm_testing$HEALTH)
+mean(svm_linear$results$Kappa[2:20])
+
+
+
+
+############################################################ RADIAL
+### ############################################################# copy from here to change sample size
+df_svm = sample_n(df_svm_full, 12000)
+
+#changing y to factor variable
+df_svm$HEALTH <- as.factor(df_svm$HEALTH)
+
+# ################### creating training data
+intrain <- createDataPartition(y= df_svm$HEALTH, p = .8,
+                                  list = FALSE,
+                                  times = 1)
+svm_train_index =c(intrain)
+svm_training <- df_svm[svm_train_index, ]
+svm_testing <- df_svm[-svm_train_index, ]
+
+#checking dimensions
+#dim(svm_training)
+#dim(svm_testing)
+
+
+#convert y into factor
+svm_training[["HEALTH"]] = factor(svm_training[["HEALTH"]])
+################################################################## to here to change sample size
+################################################################### and paste it above the model you want to use
+ 
+svm_radial = train(
+  HEALTH~., data = svm_training, method = "svmRadial", 
+  trControl = trainControl("cv", number = 10), 
+  preProcess = c("center","scale"), 
+  tuneLength = 10
+  )
+
+svm_radial
+
+
+svm_radial$bestTune
+test_pred_radial <- predict(svm_radial, newdata = svm_testing)
+test_pred_radial
+
+confusionMatrix(table(test_pred_radial, svm_testing$HEALTH))
+mean(test_pred_radial == svm_testing$HEALTH)
+
+plot(svm_radial)
+
+##############################################################  POLY
+
+#svm_poly = train(
+#  HEALTH~., data = svm_training, method = "svmPoly", 
+#  trControl = trainControl("cv", number = 10), 
+#  preProcess = c("center","scale"), 
+#  tuneLength = 10
+#  )
+
+#svm_poly
+ 
+#svm_poly$bestTune
+#test_pred_poly <- predict(svm_poly, newdata = svm_testing)
+#test_pred_poly
+
+#confusionMatrix(table(test_pred_poly, svm_testing$HEALTH))
+#mean(test_pred_poly == svm_testing$HEALTH)
+
+#could not run this test due to computational and time constraints, even after reducing sample sizes down to the 1000's. 
+# ######################################
+
+
+```
+
+

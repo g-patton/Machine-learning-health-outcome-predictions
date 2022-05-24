@@ -1,0 +1,115 @@
+---
+title: "Untitled"
+author: "Ryan Brunner"
+date: "4/12/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+summary(cars)
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+
+#Trees
+cpsdatatrees = cpsdata
+cpsdatatrees$HEALTH <-factor(cpsdatatrees$HEALTH)
+library(tree)
+#create a training set for the trees
+traintrees <- sample (1: nrow (cpsdatatrees), nrow (cpsdatatrees) / 2)
+#create a decision tree no subset selection
+fulldatasettree <- tree(HEALTH~., cpsdatatrees, subset=traintrees)
+#summary and plot the decision tree
+summary(fulldatasettree)
+plot(fulldatasettree)
+text(fulldatasettree, pretty=0)
+#create another decision tree by using cross validation
+cv.tree <- cv.tree(fulldatasettree)
+plot (cv.tree$size, cv.tree$dev, type = "b")
+
+tmin <- which.min(cv.tree$dev)
+tmin
+
+#prune the tree using the cross validtion
+prunedtree <- prune.tree (fulldatasettree , best = tmin)
+plot (prunedtree)
+text (prunedtree , pretty = 0)
+
+#predicted vlaues for the test data using full tree
+yhat <- predict (fulldatasettree , newdata = cpsdatatrees[-traintrees ,])
+#predicted vlaues for the test data using prunded tree
+yhat2 <- predict (prunedtree , newdata = cpsdatatrees[-traintrees ,])
+
+#plot actual vs predicted and find MSE
+testtrees <- cpsdatatrees[-traintrees, "HEALTH"]
+plot (yhat , testtrees)
+
+abline (0, 1)
+mean ((yhat - testtrees)^2)
+
+plot (yhat2 , testtrees)
+
+abline (0, 1)
+mean ((yhat2 - testtrees)^2)
+
+#Bagging 
+
+cpsdatabag = cpsdata
+cpsdatabag$HEALTH <-factor(cpsdatabag$HEALTH)
+library(randomForest)
+trainbag <- sample (1: nrow (cpsdatabag), nrow (cpsdatabag) / 2)
+#Createa random forest using bagging (try all 36 variables)
+bag.cps <- randomForest(HHINCOME ~., data=cpsdatabag, subset = trainbag, mtry=36, importance = TRUE)
+
+#predict y using bag.cps
+yhatbag <- predict (bag.cps, newdata = cpsdataforest[-trainbag ,])
+
+#plot predicted vs acutal for test data
+testbag <- cpsdataforest[-trainbag, "HHINCOME"]
+plot (yhatbag , testbag)
+
+abline (0, 1)
+mean ((yhatbag - testbag)^2)
+
+
+
+#Forest
+
+cpsdataforest = cpsdata
+cpsdataforest$HEALTH <-factor(cpsdataforest$HEALTH)
+library(randomForest)
+trainforest <- sample (1: nrow (cpsdataforest), nrow (cpsdataforest) / 2)
+#Create Random Forest
+forest.cps <- randomForest(HHINCOME ~., data=cpsdataforest, subset = trainforest, mtry=6, importance = TRUE)
+
+yhatforest <- predict (bag.cps, newdata = cpsdataforest[-trainforest ,])
+
+testforest <- cpsdataforest[-trainforest, "HHINCOME"]
+plot (yhatforest , testforest)
+
+abline (0, 1)
+mean ((yhatforest - testforest)^2)
+
+
+
+
+
