@@ -21,6 +21,6 @@ Using machine learning algorithms to test the viability of health outcome predic
 <h4>Dependencies</h4>
 <p>Many packages are required in R to run this code.  There is a series of library() statements at the beginning.  If you are downloading R for the first time
   or are a new user: you will see an error when you run the chunk of code with the library() statements: indicating a missing package.  run the commands 
-  "install. packages(“_______”)" individually for whatever packages are missing to download them.  Library() only calls them to allow them for immediate use (again) after they have been installed.
+  "install.packages(“_______”)" individually for whatever packages are missing to download them.  Library() only calls them to allow them for immediate use (again) after they have been installed.
 </p>
   
