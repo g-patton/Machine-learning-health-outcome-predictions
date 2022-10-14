@@ -2,9 +2,8 @@
 Using machine learning algorithms to test the viability of health outcome predictions, based on CPS survey data.
 
 <p>This project was intended to test the viability of predicting health outcomes based on a variety of factors.  In a 2002 study, researcher's 
-  tested the hypothesis that income was the single most important factor in determinding health outcomes.  Their study was largely conducted with ordinary 
-  least square regression techiniques.  In this project, I wanted to test this outcome with a variety of machine learning techniques to see what factors (if any) 
-  were significant.</p>
+  tested the hypothesis that income was the single most important factor in determinding health outcomes.  Theis 2002 analysis was largely conducted with ordinary 
+  least square regression techiniques.  In this project, I wanted to test the viability of their conclusions with a variety of machine learning techniques to see what factors (if any) were significant.</p>
   
 <h4 align="left">Languages:</h4>
 <p align="left">
