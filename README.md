@@ -11,15 +11,15 @@ Using machine learning algorithms to test the viability of health outcome predic
   
 <h3>Naviation of Files</h3>
 <p>There are quite a few files.  To view the final product: download the final_project.zip where you can view the paper and knitted(to pdf) RMD files.  
-  When selecting the zip folder on the main repository page, you most then select "view raw" to download the zipped file.</p>
+  When selecting the zip folder on the main repository page, select "view raw" to download the zipped file.</p>
   
-<p>If you would like to view the code in R, I suggest downloading the R Studio IDE and opening the RMD's in the IDE.  There is no single RMD file due to 
+<p>If you would like to view the code in R, open the RMD's in your IDE of choice (I use R studio).  There is no single RMD file due to 
   the time constraint of running many computationally intensive algorithms across a large data set.  The SVM alrogithms in particular may take several hours 
   to run.  When you see the warnings during SVM analysis, do not stop your IDE. </p>
   
 <h4>Intitial Set Up</h4>
-<p>First you must set up your working directory so that when the data sets are called, your working directory is able to pull from the folder in which they 
-  are. If you are new to R, it may be easier to put every file in the same folder so that you have no need to change directories.</p>
+<p>First set up your working directory so that when the data sets are called, your working directory is able to pull from the folder in which they 
+  are. If you are new to this, it may be easier to put every file in the same folder so that you have no need to change directories.</p>
 
 <h4>Dependencies</h4>
 <p>Many packages are required in R to run this code.  There is a series of library() statements at the beginning.  If you are downloading R for the first time
